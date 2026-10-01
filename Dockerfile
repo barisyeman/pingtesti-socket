@@ -1,4 +1,5 @@
 # pingtesti-socket — Docker / Dokploy / Coolify
+# Tek başına (Application) kullanılacaksa TURN zorunlu; coturn dahil kurulum için docker-compose.yml kullanın.
 # Konteynerde WebRTC eşine dışarıdan ulaşılamaz → TURN zorunlu:
 #   TURN_HOST + (TURN_SECRET ya da TURN_USERNAME/TURN_PASSWORD) ortam değişkenlerini verin.
 FROM node:22-bookworm-slim

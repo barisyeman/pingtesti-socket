@@ -1,0 +1,44 @@
+# pingtesti-socket + coturn — Dokploy (Compose) / docker compose
+#
+# Dokploy: Create Service → Compose → bu repo, Compose Path: ./docker-compose.yml
+#   Environment:  TURN_SECRET=<uzun rastgele bir değer>   (zorunlu)
+#   Domains:      servis "socket", port 8080, HTTPS açık
+#   Güvenlik duvarı (Hetzner vb.): 3478/udp, 3478/tcp, 49152-65535/udp açık olmalı
+#
+# coturn host ağında çalışır (TURN'ün UDP röle aralığı port eşlemesiyle verimli taşınamaz);
+# socket servisi TURN_HOST=auto ile sunucunun gerçek IP'sini kendisi bulur.
+services:
+  socket:
+    build: .
+    restart: unless-stopped
+    environment:
+      PORT: "8080"
+      HOST: 0.0.0.0
+      TURN_HOST: ${TURN_HOST:-auto}
+      TURN_PORT: "3478"
+      TURN_SECRET: ${TURN_SECRET:?TURN_SECRET ortam degiskeni gerekli}
+      ICE_POLICY: relay
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-https://www.pingtesti.com,https://pingtesti.com}
+      MAX_CONN_PER_IP: "10"
+    expose:
+      - "8080"
+    depends_on:
+      - coturn
+
+  coturn:
+    image: coturn/coturn:4.6
+    restart: unless-stopped
+    network_mode: host
+    # $$(detect-external-ip): coturn imajının kendi yardımcısı, sunucunun genel IP'sini bulur
+    command: >-
+      -n --log-file=stdout --simple-log
+      --listening-port=3478 --min-port=49152 --max-port=65535
+      --external-ip=$$(detect-external-ip)
+      --realm=pingtesti --fingerprint
+      --use-auth-secret --static-auth-secret=${TURN_SECRET:?TURN_SECRET ortam degiskeni gerekli}
+      --stale-nonce=600 --total-quota=400 --user-quota=4
+      --no-cli --no-tls --no-dtls --no-tcp-relay --no-multicast-peers --no-software-attribute
+      --denied-peer-ip=0.0.0.0-0.255.255.255 --denied-peer-ip=10.0.0.0-10.255.255.255
+      --denied-peer-ip=100.64.0.0-100.127.255.255 --denied-peer-ip=127.0.0.0-127.255.255.255
+      --denied-peer-ip=169.254.0.0-169.254.255.255 --denied-peer-ip=192.168.0.0-192.168.255.255
+      --denied-peer-ip=198.18.0.0-198.19.255.255 --denied-peer-ip=224.0.0.0-255.255.255.255
