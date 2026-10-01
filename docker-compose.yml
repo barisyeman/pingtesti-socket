@@ -30,11 +30,11 @@ services:
     image: coturn/coturn:4.6
     restart: unless-stopped
     network_mode: host
-    # $$(detect-external-ip): coturn imajının kendi yardımcısı, sunucunun genel IP'sini bulur
+    # Genel IP'si doğrudan makinede tanımlı sunucularda (Hetzner, OVH, çoğu VPS) external-ip gerekmez.
+    # NAT arkasındaysa (AWS/GCP) şu satırı ekleyin: --external-ip=GENEL_IP/OZEL_IP
     command: >-
       -n --log-file=stdout --simple-log
       --listening-port=3478 --min-port=49152 --max-port=65535
-      --external-ip=$$(detect-external-ip)
       --realm=pingtesti --fingerprint
       --lt-cred-mech --user=${TURN_USERNAME:-pingtesti}:${TURN_PASSWORD:-pingtesti}
       --stale-nonce=600 --total-quota=400 --user-quota=4
