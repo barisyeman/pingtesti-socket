@@ -13,6 +13,8 @@
  *   C→S {type:'done'}                  S→C {type:'results', list:[alınan id'ler], receivedCount}
  */
 import http from 'node:http';
+import https from 'node:https';
+import fs from 'node:fs';
 import os from 'node:os';
 import crypto from 'node:crypto';
 import { WebSocketServer } from 'ws';
@@ -86,7 +88,14 @@ const clientIp = (req) => {
 };
 
 // ---------------------------------------------------------------- HTTP
-const server = http.createServer((req, res) => {
+/**
+ * TLS_CERT + TLS_KEY verilirse sunucu SSL'i kendisi açar (wss:// doğrudan, nginx'siz — ör. Plesk'li sunucular).
+ * Sertifika dosyası yenilenince (certbot) yeniden yüklenir.
+ */
+const tlsFiles = env.TLS_CERT && env.TLS_KEY ? { cert: env.TLS_CERT, key: env.TLS_KEY } : null;
+const readTls = () => ({ cert: fs.readFileSync(tlsFiles.cert), key: fs.readFileSync(tlsFiles.key) });
+
+const onRequest = (req, res) => {
   const path = (req.url || '/').split('?')[0];
   if (path === '/health') {
     res.writeHead(200, {
@@ -101,7 +110,13 @@ const server = http.createServer((req, res) => {
   }
   res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
   res.end(`pingtesti-socket v${VERSION} (${cfg.name})\n`);
-});
+};
+const server = tlsFiles ? https.createServer(readTls(), onRequest) : http.createServer(onRequest);
+if (tlsFiles) {
+  fs.watchFile(tlsFiles.cert, { interval: 60 * 60 * 1000 }, () => {
+    try { server.setSecureContext(readTls()); log('info', 'TLS sertifikası yeniden yüklendi'); } catch (e) { log('error', 'TLS yeniden yükleme: ' + e.message); }
+  });
+}
 
 const wssPing = new WebSocketServer({ noServer: true, maxPayload: 256 * 1024 });
 const wssSpeed = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024, perMessageDeflate: false });
@@ -251,7 +266,7 @@ wssSpeed.on('connection', (ws) => {
 
 // ---------------------------------------------------------------- başlat / kapat
 server.listen(cfg.port, cfg.host, () => {
-  log('info', `pingtesti-socket v${VERSION} ${cfg.host}:${cfg.port} · TURN ${turnEnabled ? cfg.turnHost + ':' + cfg.turnPort + (cfg.turnSecret ? ' (secret)' : ' (sabit kullanıcı)') : 'kapalı'} · ICE ${cfg.icePolicy} · origin ${cfg.origins.join(' ') || '*'}`);
+  log('info', `pingtesti-socket v${VERSION} ${tlsFiles ? 'https' : 'http'}://${cfg.host}:${cfg.port} · TURN ${turnEnabled ? cfg.turnHost + ':' + cfg.turnPort + (cfg.turnSecret ? ' (secret)' : ' (sabit kullanıcı)') : 'kapalı'} · ICE ${cfg.icePolicy} · origin ${cfg.origins.join(' ') || '*'}`);
   if (!turnEnabled) log('info', 'Uyarı: TURN tanımlı değil (TURN_HOST + TURN_SECRET ya da TURN_USERNAME/TURN_PASSWORD). Docker/NAT arkasında WebRTC kanalı açılamaz.');
 });
 
