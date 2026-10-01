@@ -2,10 +2,10 @@
 #
 # Dokploy: Create Service → Compose → bu repo, Compose Path: ./docker-compose.yml
 #   Ortam değişkeni gerekmez (TURN kullanıcı/şifre varsayılan: pingtesti / pingtesti).
-#   Domains:      servis "socket", port 8080, HTTPS açık
-#   Güvenlik duvarı (Hetzner vb.): 3478/udp, 3478/tcp, 49152-65535/udp açık olmalı
+#   Domains: servis "socket", port 8080, HTTPS açık
 #
-# coturn host ağında çalışır (TURN'ün UDP röle aralığı port eşlemesiyle verimli taşınamaz);
+# coturn portları Docker tarafından yayınlanır (iptables kuralları otomatik açılır):
+#   3478/udp+tcp (TURN/STUN) ve 49160-49259/udp (röle, ~50 eşzamanlı test)
 # socket servisi TURN_HOST=auto ile sunucunun gerçek IP'sini kendisi bulur; ikisi aynı kullanıcı/şifreyi kullanır.
 services:
   socket:
@@ -29,15 +29,18 @@ services:
   coturn:
     image: coturn/coturn:4.6
     restart: unless-stopped
-    network_mode: host
-    # Genel IP'si doğrudan makinede tanımlı sunucularda (Hetzner, OVH, çoğu VPS) external-ip gerekmez.
-    # NAT arkasındaysa (AWS/GCP) şu satırı ekleyin: --external-ip=GENEL_IP/OZEL_IP
+    ports:
+      - "3478:3478/udp"
+      - "3478:3478/tcp"
+      - "49160-49259:49160-49259/udp"
+    # Konteyner köprü ağında: röle adresleri sunucunun genel IP'siyle duyurulur ($$(detect-external-ip) imajın yardımcısı)
     command: >-
       -n --log-file=stdout --simple-log
-      --listening-port=3478 --min-port=49152 --max-port=65535
+      --listening-port=3478 --min-port=49160 --max-port=49259
+      --external-ip=$$(detect-external-ip)
       --realm=pingtesti --fingerprint
       --lt-cred-mech --user=${TURN_USERNAME:-pingtesti}:${TURN_PASSWORD:-pingtesti}
-      --stale-nonce=600 --total-quota=400 --user-quota=4
+      --stale-nonce=600 --total-quota=200
       --no-cli --no-tls --no-dtls --no-tcp-relay --no-multicast-peers --no-software-attribute
       --denied-peer-ip=0.0.0.0-0.255.255.255 --denied-peer-ip=10.0.0.0-10.255.255.255
       --denied-peer-ip=100.64.0.0-100.127.255.255 --denied-peer-ip=127.0.0.0-127.255.255.255
