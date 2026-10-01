@@ -18,7 +18,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import crypto from 'node:crypto';
 import { WebSocketServer } from 'ws';
-import { RTCPeerConnection } from 'node-datachannel/polyfill';
+import { loadRTC } from './rtc.js';
 
 try { process.loadEnvFile(new URL('../.env', import.meta.url)); } catch { /* .env opsiyonel (systemd EnvironmentFile kullanır) */ }
 
@@ -44,6 +44,8 @@ const cfg = {
   logLevel: env.LOG_LEVEL || 'info',
 };
 const VERSION = 2;
+const rtc = await loadRTC((lvl, ...a) => console.log(new Date().toISOString(), lvl.toUpperCase(), ...a));
+const RTCPeerConnection = rtc.RTCPeerConnection;
 const startedAt = Date.now();
 const log = (lvl, ...a) => { if (lvl !== 'debug' || cfg.logLevel === 'debug') console[lvl === 'error' ? 'error' : 'log'](new Date().toISOString(), lvl.toUpperCase(), ...a); };
 
@@ -104,7 +106,7 @@ const onRequest = (req, res) => {
     });
     res.end(JSON.stringify({
       ok: true, name: cfg.name, version: VERSION, uptime: Math.round((Date.now() - startedAt) / 1000),
-      clients: sessions, turn: turnEnabled, policy: cfg.icePolicy, speed: true,
+      clients: sessions, turn: turnEnabled, policy: cfg.icePolicy, speed: true, rtc: rtc.name,
     }));
     return;
   }
@@ -266,7 +268,7 @@ wssSpeed.on('connection', (ws) => {
 
 // ---------------------------------------------------------------- başlat / kapat
 server.listen(cfg.port, cfg.host, () => {
-  log('info', `pingtesti-socket v${VERSION} ${tlsFiles ? 'https' : 'http'}://${cfg.host}:${cfg.port} · TURN ${turnEnabled ? cfg.turnHost + ':' + cfg.turnPort + (cfg.turnSecret ? ' (secret)' : ' (sabit kullanıcı)') : 'kapalı'} · ICE ${cfg.icePolicy} · origin ${cfg.origins.join(' ') || '*'}`);
+  log('info', `pingtesti-socket v${VERSION} ${tlsFiles ? 'https' : 'http'}://${cfg.host}:${cfg.port} · WebRTC ${rtc.name} · TURN ${turnEnabled ? cfg.turnHost + ':' + cfg.turnPort + (cfg.turnSecret ? ' (secret)' : ' (sabit kullanıcı)') : 'kapalı'} · ICE ${cfg.icePolicy} · origin ${cfg.origins.join(' ') || '*'}`);
   if (!turnEnabled) log('info', 'Uyarı: TURN tanımlı değil (TURN_HOST + TURN_SECRET ya da TURN_USERNAME/TURN_PASSWORD). Docker/NAT arkasında WebRTC kanalı açılamaz.');
 });
 

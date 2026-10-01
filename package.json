@@ -8,11 +8,15 @@
     "start": "node src/server.js",
     "test": "node test/smoke.js"
   },
-  "engines": { "node": ">=20.12" },
+  "engines": {
+    "node": ">=20.12"
+  },
   "license": "UNLICENSED",
   "private": true,
   "dependencies": {
     "node-datachannel": "^0.33.4",
+    "werift": "^0.24.4",
+    "werift": "^0.24.4",
     "ws": "^8.22.0"
   }
 }

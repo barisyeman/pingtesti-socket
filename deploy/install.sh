@@ -184,14 +184,12 @@ fi
 cd "$APP_DIR"
 build_deps() { if [[ $OS == debian ]]; then pkg_install build-essential cmake python3 libssl-dev; else pkg_install gcc-c++ make cmake python3 openssl-devel; fi; }
 "$NPM" install --omit=dev --no-audit --no-fund --silent || { warn "npm install başarısız, kaynaktan derleniyor…"; build_deps; "$NPM" install --omit=dev --no-audit --no-fund --build-from-source --silent; }
-# Hazır derlenmiş WebRTC modülü bu sistemin glibc'siyle çalışıyor mu? (ör. AlmaLinux 8 = glibc 2.28)
-if ! "$NODE_BIN" -e "import('node-datachannel/polyfill').then(()=>process.exit(0),e=>{console.error(e.message);process.exit(1)})"; then
-  warn "Hazır WebRTC modülü bu sistemde yüklenemedi, kaynaktan derleniyor (birkaç dakika sürebilir)…"
-  build_deps
-  rm -rf node_modules/node-datachannel
-  "$NPM" install --omit=dev --no-audit --no-fund --build-from-source node-datachannel --silent
-  "$NODE_BIN" -e "import('node-datachannel/polyfill').then(()=>process.exit(0),e=>{console.error(e.message);process.exit(1)})" \
-    || die "WebRTC modülü (node-datachannel) bu sistemde çalıştırılamadı."
+# WebRTC: hazır node-datachannel bu sistemin glibc'siyle çalışmıyorsa (ör. AlmaLinux 8 = glibc 2.28)
+# servis otomatik olarak saf JavaScript werift'e geçer — derleme gerekmez.
+if "$NODE_BIN" -e "import('node-datachannel/polyfill').then(()=>process.exit(0),()=>process.exit(1))" 2>/dev/null; then
+  ok "WebRTC: node-datachannel"
+else
+  ok "WebRTC: werift (bu sistemde hazır node-datachannel çalışmıyor — otomatik yedek)"
 fi
 if command -v getenforce >/dev/null && [[ "$(getenforce)" != Disabled ]]; then
   [[ -x "$RUNTIME/bin/node" ]] && chcon -t bin_t "$RUNTIME/bin/node" 2>/dev/null || true
