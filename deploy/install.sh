@@ -147,8 +147,12 @@ if ((${#need[@]})); then pkg_install "${need[@]}"; ok "kuruldu: ${need[*]}"; els
 
 # =============================================================================
 step "Node.js"
-if command -v node >/dev/null && [[ $(node -p 'process.versions.node.split(".")[0]') -ge 20 ]]; then
-  NODE_BIN=$(command -v node); ok "sistem node $(node -v) kullanılacak"
+SYS_NODE=""
+for n in /usr/bin/node /usr/local/bin/node; do
+  [[ -x $n ]] && [[ $($n -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0) -ge 20 ]] && { SYS_NODE=$n; break; }
+done
+if [[ -n "$SYS_NODE" ]]; then
+  NODE_BIN=$SYS_NODE; ok "sistem node $($NODE_BIN -v) kullanılacak"
 else
   case "$(uname -m)" in x86_64) arch=x64 ;; aarch64|arm64) arch=arm64 ;; *) die "Desteklenmeyen mimari: $(uname -m)" ;; esac
   if [[ ! -x "$RUNTIME/bin/node" || "$("$RUNTIME/bin/node" -v 2>/dev/null)" != "v$NODE_VERSION" ]]; then
@@ -178,10 +182,21 @@ else
   ok "indirildi"
 fi
 cd "$APP_DIR"
-if ! "$NPM" install --omit=dev --no-audit --no-fund --silent; then
-  warn "Hazır derleme bulunamadı, kaynak koddan derleniyor…"
-  if [[ $OS == debian ]]; then pkg_install build-essential cmake python3; else pkg_install gcc-c++ make cmake python3; fi
-  "$NPM" install --omit=dev --no-audit --no-fund --build-from-source --silent
+build_deps() { if [[ $OS == debian ]]; then pkg_install build-essential cmake python3 libssl-dev; else pkg_install gcc-c++ make cmake python3 openssl-devel; fi; }
+"$NPM" install --omit=dev --no-audit --no-fund --silent || { warn "npm install başarısız, kaynaktan derleniyor…"; build_deps; "$NPM" install --omit=dev --no-audit --no-fund --build-from-source --silent; }
+# Hazır derlenmiş WebRTC modülü bu sistemin glibc'siyle çalışıyor mu? (ör. AlmaLinux 8 = glibc 2.28)
+if ! "$NODE_BIN" -e "import('node-datachannel/polyfill').then(()=>process.exit(0),e=>{console.error(e.message);process.exit(1)})"; then
+  warn "Hazır WebRTC modülü bu sistemde yüklenemedi, kaynaktan derleniyor (birkaç dakika sürebilir)…"
+  build_deps
+  rm -rf node_modules/node-datachannel
+  "$NPM" install --omit=dev --no-audit --no-fund --build-from-source node-datachannel --silent
+  "$NODE_BIN" -e "import('node-datachannel/polyfill').then(()=>process.exit(0),e=>{console.error(e.message);process.exit(1)})" \
+    || die "WebRTC modülü (node-datachannel) bu sistemde çalıştırılamadı."
+fi
+if command -v getenforce >/dev/null && [[ "$(getenforce)" != Disabled ]]; then
+  [[ -x "$RUNTIME/bin/node" ]] && chcon -t bin_t "$RUNTIME/bin/node" 2>/dev/null || true
+  restorecon -R "$APP_DIR" 2>/dev/null || true
+  [[ -x "$RUNTIME/bin/node" ]] && chcon -t bin_t "$RUNTIME/bin/node" 2>/dev/null || true
 fi
 chown -R pingtesti:pingtesti "$APP_DIR"
 ok "bağımlılıklar kuruldu"
@@ -328,7 +343,16 @@ systemctl enable -q pingtesti-socket
 systemctl restart pingtesti-socket
 sleep 2
 LOCAL_SCHEME=$([[ -n "$TLS_ENV" ]] && echo https || echo http)
-curl -kfsS "$LOCAL_SCHEME://127.0.0.1:$PORT/health" >/dev/null && ok "pingtesti-socket çalışıyor ($LOCAL_SCHEME, port $PORT)" || die "Servis yanıt vermiyor: journalctl -u pingtesti-socket -n 50"
+for i in 1 2 3 4 5; do curl -kfsS "$LOCAL_SCHEME://127.0.0.1:$PORT/health" >/dev/null 2>&1 && break; sleep 2; done
+if curl -kfsS "$LOCAL_SCHEME://127.0.0.1:$PORT/health" >/dev/null 2>&1; then
+  ok "pingtesti-socket çalışıyor ($LOCAL_SCHEME, port $PORT)"
+else
+  echo "--- servis logu (journalctl -u pingtesti-socket) ---"
+  journalctl -u pingtesti-socket -n 40 --no-pager 2>&1 | tail -40
+  echo "--- node: $NODE_BIN ($("$NODE_BIN" -v 2>&1)) · glibc: $(ldd --version 2>&1 | head -1)"
+  command -v getenforce >/dev/null && echo "--- SELinux: $(getenforce)" && (ausearch -m avc -ts recent 2>/dev/null | tail -5 || true)
+  die "Servis yanıt vermiyor (yukarıdaki log)."
+fi
 
 # =============================================================================
 if [[ $MODE == nginx ]]; then
