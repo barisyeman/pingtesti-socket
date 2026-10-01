@@ -1,12 +1,12 @@
 # pingtesti-socket + coturn — Dokploy (Compose) / docker compose
 #
 # Dokploy: Create Service → Compose → bu repo, Compose Path: ./docker-compose.yml
-#   Environment:  TURN_SECRET=<uzun rastgele bir değer>   (zorunlu)
+#   Ortam değişkeni gerekmez (TURN kullanıcı/şifre varsayılan: pingtesti / pingtesti).
 #   Domains:      servis "socket", port 8080, HTTPS açık
 #   Güvenlik duvarı (Hetzner vb.): 3478/udp, 3478/tcp, 49152-65535/udp açık olmalı
 #
 # coturn host ağında çalışır (TURN'ün UDP röle aralığı port eşlemesiyle verimli taşınamaz);
-# socket servisi TURN_HOST=auto ile sunucunun gerçek IP'sini kendisi bulur.
+# socket servisi TURN_HOST=auto ile sunucunun gerçek IP'sini kendisi bulur; ikisi aynı kullanıcı/şifreyi kullanır.
 services:
   socket:
     build: .
@@ -16,7 +16,8 @@ services:
       HOST: 0.0.0.0
       TURN_HOST: ${TURN_HOST:-auto}
       TURN_PORT: "3478"
-      TURN_SECRET: ${TURN_SECRET:?TURN_SECRET ortam degiskeni gerekli}
+      TURN_USERNAME: ${TURN_USERNAME:-pingtesti}
+      TURN_PASSWORD: ${TURN_PASSWORD:-pingtesti}
       ICE_POLICY: relay
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-https://www.pingtesti.com,https://pingtesti.com}
       MAX_CONN_PER_IP: "10"
@@ -35,7 +36,7 @@ services:
       --listening-port=3478 --min-port=49152 --max-port=65535
       --external-ip=$$(detect-external-ip)
       --realm=pingtesti --fingerprint
-      --use-auth-secret --static-auth-secret=${TURN_SECRET:?TURN_SECRET ortam degiskeni gerekli}
+      --lt-cred-mech --user=${TURN_USERNAME:-pingtesti}:${TURN_PASSWORD:-pingtesti}
       --stale-nonce=600 --total-quota=400 --user-quota=4
       --no-cli --no-tls --no-dtls --no-tcp-relay --no-multicast-peers --no-software-attribute
       --denied-peer-ip=0.0.0.0-0.255.255.255 --denied-peer-ip=10.0.0.0-10.255.255.255
