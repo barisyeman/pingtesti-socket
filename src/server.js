@@ -15,6 +15,7 @@
 import http from 'node:http';
 import https from 'node:https';
 import fs from 'node:fs';
+import dns from 'node:dns/promises';
 import os from 'node:os';
 import crypto from 'node:crypto';
 import { WebSocketServer } from 'ws';
@@ -50,7 +51,30 @@ const startedAt = Date.now();
 const log = (lvl, ...a) => { if (lvl !== 'debug' || cfg.logLevel === 'debug') console[lvl === 'error' ? 'error' : 'log'](new Date().toISOString(), lvl.toUpperCase(), ...a); };
 
 // ---------------------------------------------------------------- TURN REST kimliği
-const turnEnabled = Boolean(cfg.turnHost && (cfg.turnSecret || cfg.turnUser));
+// TURN UDP Cloudflare proxy'sinden geçemez. TURN_HOST Cloudflare'e çözülüyorsa (turuncu bulut) ya da 'auto' ise
+// sunucunun gerçek genel IP'si kullanılır.
+const CF_V4 = ['173.245.48.0/20', '103.21.244.0/22', '103.22.200.0/22', '103.31.4.0/22', '141.101.64.0/18', '108.162.192.0/18',
+  '190.93.240.0/20', '188.114.96.0/20', '197.234.240.0/22', '198.41.128.0/17', '162.158.0.0/15', '104.16.0.0/13', '104.24.0.0/14',
+  '172.64.0.0/13', '131.0.72.0/22'];
+const ip4num = (ip) => ip.split('.').reduce((a, b) => (a << 8) + (+b), 0) >>> 0;
+const inCidr = (ip, cidr) => { const [n, b] = cidr.split('/'); const m = b === '0' ? 0 : (~0 << (32 - +b)) >>> 0; return (ip4num(ip) & m) === (ip4num(n) & m); };
+async function publicIp() {
+  for (const u of ['https://api.ipify.org', 'https://ifconfig.me/ip', 'https://icanhazip.com']) {
+    try { const r = await fetch(u, { signal: AbortSignal.timeout(5000) }); const t = (await r.text()).trim(); if (/^\d+\.\d+\.\d+\.\d+$/.test(t)) return t; } catch { /* sıradaki */ }
+  }
+  return null;
+}
+if (cfg.turnHost && (cfg.turnSecret || cfg.turnUser)) {
+  let behindCf = cfg.turnHost === 'auto';
+  if (!behindCf && !/^\d+\.\d+\.\d+\.\d+$/.test(cfg.turnHost)) {
+    try { const { address } = await dns.lookup(cfg.turnHost, { family: 4 }); behindCf = CF_V4.some((c) => inCidr(address, c)); } catch { /* çözülemedi */ }
+  }
+  if (behindCf) {
+    const ip = await publicIp();
+    if (ip) { console.log(new Date().toISOString(), 'INFO', `TURN_HOST ${cfg.turnHost} Cloudflare proxy'sinde/auto → gerçek IP kullanılıyor: ${ip}`); cfg.turnHost = ip; }
+  }
+}
+const turnEnabled = Boolean(cfg.turnHost && cfg.turnHost !== 'auto' && (cfg.turnSecret || cfg.turnUser));
 
 /**
  * TURN kimliği:
@@ -106,7 +130,7 @@ const onRequest = (req, res) => {
     });
     res.end(JSON.stringify({
       ok: true, name: cfg.name, version: VERSION, uptime: Math.round((Date.now() - startedAt) / 1000),
-      clients: sessions, turn: turnEnabled, policy: cfg.icePolicy, speed: true, rtc: rtc.name,
+      clients: sessions, turn: turnEnabled, turnHost: turnEnabled ? cfg.turnHost : null, policy: cfg.icePolicy, speed: true, rtc: rtc.name,
     }));
     return;
   }
