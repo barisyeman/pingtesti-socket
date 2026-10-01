@@ -77,6 +77,28 @@ if (cfg.turnHost && (cfg.turnSecret || cfg.turnUser)) {
 const turnEnabled = Boolean(cfg.turnHost && cfg.turnHost !== 'auto' && (cfg.turnSecret || cfg.turnUser));
 
 /**
+ * Doğrudan mod (TURN yoksa): tüm WebRTC bağlantıları TEK bir UDP portundan geçer (ICE UDP mux).
+ * Docker'da yalnızca bu portu yayınlamak yeter (ör. 3478/udp). Konteynerin iç IP'si yerine sunucunun
+ * genel IP'si duyurulur. Tarayıcı sunucuya doğrudan UDP ile bağlanır — arada TURN durağı yoktur.
+ */
+const directMode = !turnEnabled && rtc.name === 'node-datachannel';
+cfg.udpPort = +env.RTC_UDP_PORT || 3478;
+let announceIp = env.PUBLIC_IP || null;
+if (directMode && !announceIp) announceIp = await publicIp();
+if (directMode) cfg.icePolicy = 'all';
+const PRIVATE_V4 = /^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|169\.254\.)/;
+/** "candidate:… <ip> <port> typ host" içindeki özel IPv4'ü genel IP ile değiştir. */
+const publicize = (cand) => {
+  if (!directMode || !announceIp) return cand;
+  const p = cand.split(' ');
+  if (p.length > 7 && p[7] === 'host' && PRIVATE_V4.test(p[4])) p[4] = announceIp;
+  return p.join(' ');
+};
+const publicizeSdp = (sdp) => (directMode && announceIp
+  ? sdp.split('\r\n').map((l) => (l.startsWith('a=candidate:') ? 'a=' + publicize(l.slice(2)) : l)).join('\r\n')
+  : sdp);
+
+/**
  * TURN kimliği:
  *  - TURN_SECRET varsa coturn "use-auth-secret": kullanıcı = sonGeçerlilik:rastgele, şifre = base64(HMAC-SHA1(secret, kullanıcı))
  *  - yoksa TURN_USERNAME / TURN_PASSWORD (sabit kullanıcı)
@@ -89,7 +111,7 @@ function turnCredentials() {
   return { username: cfg.turnUser, credential: cfg.turnPass };
 }
 function iceServersForClient() {
-  if (!turnEnabled) return [{ urls: 'stun:stun.l.google.com:19302' }];
+  if (!turnEnabled) return [{ urls: 'stun:stun.l.google.com:19302' }];  // doğrudan mod
   return [
     { urls: `stun:${cfg.turnHost}:${cfg.turnPort}` },
     { urls: `turn:${cfg.turnHost}:${cfg.turnPort}?transport=udp`, ...turnCredentials() },
@@ -130,7 +152,8 @@ const onRequest = (req, res) => {
     });
     res.end(JSON.stringify({
       ok: true, name: cfg.name, version: VERSION, uptime: Math.round((Date.now() - startedAt) / 1000),
-      clients: sessions, turn: turnEnabled, turnHost: turnEnabled ? cfg.turnHost : null, policy: cfg.icePolicy, speed: true, rtc: rtc.name,
+      clients: sessions, mode: turnEnabled ? 'turn' : directMode ? 'direct' : 'none', turn: turnEnabled, turnHost: turnEnabled ? cfg.turnHost : null,
+      udpPort: directMode ? cfg.udpPort : null, publicIp: directMode ? announceIp : null, policy: cfg.icePolicy, speed: true, rtc: rtc.name,
     }));
     return;
   }
@@ -204,10 +227,12 @@ wssPing.on('connection', (ws, req, ip) => {
     try { msg = JSON.parse(raw.toString()); } catch { return; }
     try {
       if (msg.type === 'offer' && !pc && typeof msg.sdp === 'string') {
-        pc = new RTCPeerConnection({ iceServers: serverIce() });
+        pc = new RTCPeerConnection(directMode
+          ? { iceServers: [], iceTransportPolicy: 'all', enableIceUdpMux: true, portRangeBegin: cfg.udpPort, portRangeEnd: cfg.udpPort }
+          : { iceServers: serverIce() });
         pc.onicecandidate = (e) => {
           const c = e.candidate;
-          if (c && c.candidate) sendJson(ws, { type: 'ice', ice: { candidate: c.candidate, sdpMid: c.sdpMid ?? '0', sdpMLineIndex: c.sdpMLineIndex ?? 0 } });
+          if (c && c.candidate) sendJson(ws, { type: 'ice', ice: { candidate: publicize(c.candidate), sdpMid: c.sdpMid ?? '0', sdpMLineIndex: c.sdpMLineIndex ?? 0 } });
         };
         pc.ondatachannel = (e) => {
           dc = e.channel;
@@ -222,7 +247,7 @@ wssPing.on('connection', (ws, req, ip) => {
         await pc.setRemoteDescription({ type: 'offer', sdp: msg.sdp });
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
-        sendJson(ws, { type: 'answer', sdp: pc.localDescription.sdp });
+        sendJson(ws, { type: 'answer', sdp: publicizeSdp(pc.localDescription.sdp) });
       } else if (msg.type === 'ice' && pc && msg.ice && msg.ice.candidate) {
         await pc.addIceCandidate({ candidate: String(msg.ice.candidate), sdpMid: msg.ice.sdpMid ?? '0', sdpMLineIndex: msg.ice.sdpMLineIndex ?? 0 });
       } else if (msg.type === 'done') {
@@ -293,7 +318,8 @@ wssSpeed.on('connection', (ws) => {
 // ---------------------------------------------------------------- başlat / kapat
 server.listen(cfg.port, cfg.host, () => {
   log('info', `pingtesti-socket v${VERSION} ${tlsFiles ? 'https' : 'http'}://${cfg.host}:${cfg.port} · WebRTC ${rtc.name} · TURN ${turnEnabled ? cfg.turnHost + ':' + cfg.turnPort + (cfg.turnSecret ? ' (secret)' : ' (sabit kullanıcı)') : 'kapalı'} · ICE ${cfg.icePolicy} · origin ${cfg.origins.join(' ') || '*'}`);
-  if (!turnEnabled) log('info', 'Uyarı: TURN tanımlı değil (TURN_HOST + TURN_SECRET ya da TURN_USERNAME/TURN_PASSWORD). Docker/NAT arkasında WebRTC kanalı açılamaz.');
+  if (directMode) log('info', `Doğrudan mod: WebRTC tek UDP portunda (${cfg.udpPort}/udp), duyurulan IP ${announceIp || 'bulunamadı'}. Docker'da ${cfg.udpPort}/udp yayınlanmalı.`);
+  else if (!turnEnabled) log('info', 'Uyarı: TURN yok ve node-datachannel yüklenemedi; Docker/NAT arkasında WebRTC kanalı açılamayabilir.');
 });
 
 const shutdown = () => {
